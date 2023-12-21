@@ -338,11 +338,53 @@ readonly struct PgNumeric
             const int MaxDecimalScale = 28;
 
             var digitCount = digits.Length;
-            if (digitCount > MaxDecimalNumericDigits)
-                throw new OverflowException("Numeric value does not fit in a System.Decimal");
-
-            if (Math.Abs(scale) > MaxDecimalScale)
-                throw new OverflowException("Numeric value does not fit in a System.Decimal");
+            var digitOverflow = digitCount > MaxDecimalNumericDigits;
+            if (digitOverflow || Math.Abs(scale) > MaxDecimalScale)
+            {
+                if (weight < 0)
+                {
+                    //Reduce the number of digits to fit System.Decimal
+                    var slice = MaxDecimalNumericDigits - Math.Abs(weight);
+                    if (slice < digitCount) // Only slice if we have more digits than a System.Decimal can hold
+                    {
+                        digits = digits.Slice(0, slice);
+                        digitCount = digits.Length;
+                    }
+                    scale = MaxDecimalScale; // Set scale to max
+                }
+                else if (digitCount > weight + 1)
+                {
+                    var scaleOffset = 0;
+                    if (digitOverflow)
+                    {
+                        digits = digits.Slice(0, MaxDecimalNumericDigits - 1);
+                        digitCount = digits.Length;
+                    }
+                    else
+                    {
+                        scaleOffset = digits[0] > 999
+                            ? 4
+                            : digits[0] > 99
+                                ? 3
+                                : digits[0] > 9
+                                    ? 2
+                                    : 1;
+                    }
+                    //Reduce scale to fit System.Decimal
+                    var diff = digitCount - (weight + 1);
+                    scale = (short)(diff * 4 - scaleOffset); // 4 is the log10 of 10,000 (simulates the groups of digits)
+                }
+                else
+                {
+                    //The decimal value does not have any fractional digits
+                    scale = 0;
+                }
+            }
+            else if (scale == MaxDecimalScale && weight >= 0)
+            {
+                //Calculate the scale based on the fractional digits
+                scale = (short)((digitCount - (weight + 1)) * 4);
+            }
 
             var scaleFactor = new decimal(1, 0, 0, false, (byte)(scale > 0 ? scale : 0));
             if (digitCount == 0)
