@@ -354,25 +354,16 @@ readonly struct PgNumeric
                 }
                 else if (digitCount > weight + 1)
                 {
-                    var scaleOffset = 0;
                     if (digitOverflow)
                     {
-                        digits = digits.Slice(0, MaxDecimalNumericDigits - 1);
+                        digits = digits.Slice(0, MaxDecimalNumericDigits);
                         digitCount = digits.Length;
                     }
-                    else
-                    {
-                        scaleOffset = digits[0] > 999
-                            ? 4
-                            : digits[0] > 99
-                                ? 3
-                                : digits[0] > 9
-                                    ? 2
-                                    : 1;
-                    }
+
+                    var scaleOffset = digits[0].ToString().Length;
                     //Reduce scale to fit System.Decimal
                     var diff = digitCount - (weight + 1);
-                    scale = (short)(diff * 4 - scaleOffset); // 4 is the log10 of 10,000 (simulates the groups of digits)
+                    scale = Math.Min((short)(diff * 4 - scaleOffset), (short)MaxDecimalScale); // 4 is the log10 of 10,000 (simulates the groups of digits)
                 }
                 else
                 {
@@ -443,6 +434,7 @@ readonly struct PgNumeric
             }
 
             result *= scaleFactor;
+
             return sign == SignNegative ? -result : result;
         }
 

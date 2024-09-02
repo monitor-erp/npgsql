@@ -88,6 +88,23 @@ public class NumericTests : MultiplexingTestBase
         new object[] { "0::numeric", 0M },
     };
 
+    static readonly string[] numericTests = new string[]
+    {
+        "980568.13428000000338620221111111111111678123678129",
+        "8980568.13428000000338620221111111111111678123678129",
+        "58980568.13428000000338620200011111111111678123678129",
+        "458980568.134280000003386202002222222222222678123678129",
+        "1458980568.13428000000338620201222222222222678123678129",
+        "1458980568.13428000000338620200000000000000000000000000",
+        "911112998.25401999999668454040000000000000000000000000",
+        "-911112998.25401999999668454040000000000000000000000000",
+        "9739.695000007986111111111111060000000000000000000000",
+        "966.691375001041666666666666600000000000000000000000",
+        "76.2600000000000000000000000000",
+        "279.0000000000000000000000000000",
+        "380000.0000000000000000000000000000",
+    };
+
     [Test]
     [TestCaseSource(nameof(ReadWriteCases))]
     public async Task Read(string query, decimal expected)
@@ -151,41 +168,28 @@ public class NumericTests : MultiplexingTestBase
     }
 
     [Test]
-    public async Task Scale_overflow_is_safe()
+    [TestCaseSource(nameof(numericTests))]
+    public async Task Scale_overflow_is_safe(string number)
     {
-        var numbers = new[]
+        using var conn = await OpenConnectionAsync();
+        //This 29-digit number causes OverflowException. Here it is important to have unread column after failing one to leave it ReaderState.InResult
+        using var cmd = new NpgsqlCommand($@"SELECT ({number})::numeric, generate_series FROM generate_series(1, 2)", conn);
+        using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess);
+        var i = 1;
+
+        var expected = decimal.Parse(number, CultureInfo.InvariantCulture);
+
+        while (reader.Read())
         {
-            "1458980568.13428000000338620200000000000000000000000000",
-            "911112998.25401999999668454040000000000000000000000000",
-            "-911112998.25401999999668454040000000000000000000000000",
-            "9739.695000007986111111111111060000000000000000000000",
-            "966.691375001041666666666666600000000000000000000000",
-            "76.2600000000000000000000000000",
-            "279.0000000000000000000000000000",
-            "380000.0000000000000000000000000000",
-        };
-        foreach (var number in numbers)
-        {
-            using var conn = await OpenConnectionAsync();
-            //This 29-digit number causes OverflowException. Here it is important to have unread column after failing one to leave it ReaderState.InResult
-            using var cmd = new NpgsqlCommand($@"SELECT ({number})::numeric, generate_series FROM generate_series(1, 2)", conn);
-            using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess);
-            var i = 1;
+            //_ = reader.GetDecimal(0);
+            Assert.That(reader.GetDecimal(0), Is.EqualTo(expected));
 
-            var expected = decimal.Parse(number, CultureInfo.InvariantCulture);
+            var intValue = reader.GetInt32(1);
 
-            while (reader.Read())
-            {
-                //_ = reader.GetDecimal(0);
-                Assert.That(reader.GetDecimal(0), Is.EqualTo(expected));
-
-                var intValue = reader.GetInt32(1);
-
-                Assert.That(intValue, Is.EqualTo(i++));
-                Assert.That(conn.FullState, Is.EqualTo(ConnectionState.Open | ConnectionState.Fetching));
-                Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
-                Assert.That(reader.State, Is.EqualTo(ReaderState.InResult));
-            }
+            Assert.That(intValue, Is.EqualTo(i++));
+            Assert.That(conn.FullState, Is.EqualTo(ConnectionState.Open | ConnectionState.Fetching));
+            Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
+            Assert.That(reader.State, Is.EqualTo(ReaderState.InResult));
         }
     }
 
