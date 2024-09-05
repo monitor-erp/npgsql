@@ -90,6 +90,7 @@ public class NumericTests : MultiplexingTestBase
 
     static readonly string[] numericTests = new string[]
     {
+        "264383.511600000000000000000000",
         "980568.13428000000338620221111111111111678123678129",
         "8980568.13428000000338620221111111111111678123678129",
         "58980568.13428000000338620200011111111111678123678129",
@@ -103,6 +104,8 @@ public class NumericTests : MultiplexingTestBase
         "76.2600000000000000000000000000",
         "279.0000000000000000000000000000",
         "380000.0000000000000000000000000000",
+        "38123000000",
+        "38100000000",
     };
 
     [Test]
@@ -112,7 +115,7 @@ public class NumericTests : MultiplexingTestBase
         using var conn = await OpenConnectionAsync();
         using var cmd = new NpgsqlCommand("SELECT " + query, conn);
         var value = (decimal)(await cmd.ExecuteScalarAsync())!;
-        Assert.That(decimal.GetBits(value), Is.EqualTo(decimal.GetBits(expected)));
+        Assert.That(value, Is.EqualTo(expected));
     }
 
     [Test]
@@ -124,10 +127,9 @@ public class NumericTests : MultiplexingTestBase
         cmd.Parameters.AddWithValue("p", expected);
         using var rdr = await cmd.ExecuteReaderAsync();
         rdr.Read();
-        Assert.That(decimal.GetBits(rdr.GetFieldValue<decimal>(0)), Is.EqualTo(decimal.GetBits(expected)));
+        Assert.That(rdr.GetFieldValue<decimal>(0), Is.EqualTo(expected));
         Assert.That(rdr.GetFieldValue<bool>(1));
     }
-
 
     [Test]
     public async Task Numeric()

@@ -332,8 +332,70 @@ readonly struct PgNumeric
             return digits;
         }
 
+        private static short CountDigits(short first)
+        {
+            short i = 0;
+            var t = first;
+            while (t > 0)
+            {
+                t /= 10;
+                i++;
+            }
+            return i;
+        }
+
         internal static decimal ToDecimal(short scale, short weight, ushort sign, Span<short> digits)
         {
+#if NET8_0_OR_GREATER
+            Int128 x = 0;
+            var shortsUsed = Math.Min(digits.Length, 8);
+            byte pow;
+
+            for (var i = 0; i < shortsUsed; i++)
+            {
+                x *= 10000;
+                x += digits[i];
+            }
+            if (weight >= digits.Length - 1)
+            {
+                pow = 0;
+
+                var mod = weight + 1 - digits.Length;
+                for (var i = 0; i < mod; i++)
+                {
+                    x *= 10000;
+                }
+            }
+            else
+            {
+                if (weight < 0)
+                {
+                    var digitsUsed = shortsUsed * 4;
+                    pow = (byte)(digitsUsed - (weight + 1) * 4);
+                }
+                else
+                {
+                    var count = CountDigits(digits[0]);
+                    var rest = (4 - count);
+                    var left = ((weight + 1) * 4) - rest;
+                    var trailing = (shortsUsed * 4 - rest) - left;
+                    pow = (byte)(trailing);
+                }
+
+                var debug__len = x.ToString().Length;
+                while (Int128.LeadingZeroCount(x) < 32 || pow > (byte)28)
+                {
+                    x /= 10;
+                    pow--;
+                }
+            }
+            var lo = (int)(x & 0xffffffff);
+            var mid = (int)((x >> 32) & 0xffffffff);
+            var hi = (int)((x >> 64) & 0xffffffff);
+            var value = new decimal(lo, mid, hi, sign != 0, pow);
+            return value;
+#else
+
             const int MaxUIntScale = 9;
             const int MaxDecimalScale = 28;
 
@@ -371,10 +433,9 @@ readonly struct PgNumeric
                     scale = 0;
                 }
             }
-            else if (scale == MaxDecimalScale && weight >= 0)
+            if (weight > 0 && weight < digitCount - 1)
             {
-                //Calculate the scale based on the fractional digits
-                scale = (short)((digitCount - (weight + 1)) * 4);
+                scale = Math.Min(scale, (short)((digitCount - (weight + 1)) * 4));
             }
 
             var scaleFactor = new decimal(1, 0, 0, false, (byte)(scale > 0 ? scale : 0));
@@ -436,6 +497,7 @@ readonly struct PgNumeric
             result *= scaleFactor;
 
             return sign == SignNegative ? -result : result;
+#endif
         }
 
         internal static BigInteger ToBigInteger(short weight, ushort sign, Span<short> digits)
