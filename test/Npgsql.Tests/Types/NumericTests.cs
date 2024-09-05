@@ -106,6 +106,18 @@ public class NumericTests : MultiplexingTestBase
         "380000.0000000000000000000000000000",
         "38123000000",
         "38100000000",
+        "79228162514264337593543950335",
+        "-79228162514264337593543950335",
+    };
+
+    static readonly string[] overflowTests = new string[]
+    {
+        "79228162514264337593543950336",
+        "792281625142643375935439503361",
+        "-79228162514264337593543950336",
+        "-792281625142643375935439503361",
+        "79228162514264337593543950336.1",
+        "-79228162514264337593543950336.1",
     };
 
     [Test]
@@ -170,20 +182,43 @@ public class NumericTests : MultiplexingTestBase
     }
 
     [Test]
+    [TestCaseSource(nameof(overflowTests))]
+    public async Task HandleDecimalMaxValue(string number)
+    {
+        using var conn = await OpenConnectionAsync();
+        using var cmd = new NpgsqlCommand($@"SELECT ({number})::numeric, generate_series FROM generate_series(1, 2)", conn);
+        using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess);
+
+        while (reader.Read())
+        {
+            try
+            {
+                var v = reader.GetDecimal(0);
+                Assert.Fail();
+            }
+            catch (OverflowException)
+            {
+
+            }
+            catch
+            {
+                Assert.Fail();
+            }
+        }
+    }
+
+    [Test]
     [TestCaseSource(nameof(numericTests))]
     public async Task Scale_overflow_is_safe(string number)
     {
         using var conn = await OpenConnectionAsync();
-        //This 29-digit number causes OverflowException. Here it is important to have unread column after failing one to leave it ReaderState.InResult
         using var cmd = new NpgsqlCommand($@"SELECT ({number})::numeric, generate_series FROM generate_series(1, 2)", conn);
         using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess);
         var i = 1;
 
         var expected = decimal.Parse(number, CultureInfo.InvariantCulture);
-
         while (reader.Read())
         {
-            //_ = reader.GetDecimal(0);
             Assert.That(reader.GetDecimal(0), Is.EqualTo(expected));
 
             var intValue = reader.GetInt32(1);

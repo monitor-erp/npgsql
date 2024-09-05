@@ -351,6 +351,11 @@ readonly struct PgNumeric
             var shortsUsed = Math.Min(digits.Length, 8);
             byte pow;
 
+            if (weight >= 8)
+            {
+                throw new OverflowException();
+            }
+
             for (var i = 0; i < shortsUsed; i++)
             {
                 x *= 10000;
@@ -364,6 +369,10 @@ readonly struct PgNumeric
                 for (var i = 0; i < mod; i++)
                 {
                     x *= 10000;
+                }
+                if(Int128.LeadingZeroCount(x) < 32)
+                {
+                    throw new OverflowException();
                 }
             }
             else
@@ -381,12 +390,15 @@ readonly struct PgNumeric
                     var trailing = (shortsUsed * 4 - rest) - left;
                     pow = (byte)(trailing);
                 }
-
-                var debug__len = x.ToString().Length;
-                while (Int128.LeadingZeroCount(x) < 32 || pow > (byte)28)
+                var maxshifts = (int) pow;
+                while (Int128.LeadingZeroCount(x) < 32 || (pow > 28))
                 {
                     x /= 10;
                     pow--;
+                    if(--maxshifts < 0)
+                    {
+                        throw new OverflowException();
+                    }
                 }
             }
             var lo = (int)(x & 0xffffffff);
