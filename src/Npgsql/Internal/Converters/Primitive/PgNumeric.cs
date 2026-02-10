@@ -294,74 +294,85 @@ readonly struct PgNumeric(ArraySegment<short> digits, short weight, short sign, 
 
         internal static decimal ToDecimal(short scale, short weight, ushort sign, Span<short> digits)
         {
-            const int MaxUIntScale = 9;
-            const int MaxDecimalScale = 28;
+            Int128 x = 0;
+            var shortsUsed = Math.Min(digits.Length, 8);
+            byte pow;
 
-            var digitCount = digits.Length;
-            if (digitCount > MaxDecimalNumericDigits)
-                throw new OverflowException("Numeric value does not fit in a System.Decimal");
-
-            if (Math.Abs(scale) > MaxDecimalScale)
-                throw new OverflowException("Numeric value does not fit in a System.Decimal");
-
-            var scaleFactor = new decimal(1, 0, 0, false, (byte)(scale > 0 ? scale : 0));
-            if (digitCount == 0)
-                return sign switch
-                {
-                    SignPositive or SignNegative => decimal.Zero * scaleFactor,
-                    SignNan => throw new InvalidCastException("Numeric NaN not supported by System.Decimal"),
-                    SignPinf => throw new InvalidCastException("Numeric Infinity not supported by System.Decimal"),
-                    SignNinf => throw new InvalidCastException("Numeric -Infinity not supported by System.Decimal"),
-                    _ => throw new ArgumentOutOfRangeException()
-                };
-
-            var numericBase = new decimal(NumericBase);
-            var result = decimal.Zero;
-            for (var i = 0; i < digitCount - 1; i++)
+            if (weight >= 8)
             {
-                result *= numericBase;
-                result += digits[i];
+                throw new OverflowException();
             }
 
-            var digitScale = (weight + 1 - digitCount) * NumericBaseLog10;
-            var scaleDifference = scale < 0 ? digitScale : digitScale + scale;
-
-            var digit = digits[digitCount - 1];
-            if (digitCount == MaxDecimalNumericDigits)
+            for (var i = 0; i < shortsUsed; i++)
             {
-                // On the max group we adjust the base based on the scale difference, to prevent overflow for valid values.
-                var pow = UIntPowers10[-scaleDifference];
-                result *= numericBase / pow;
-                result += new decimal(digit / pow);
+                x *= 10000;
+                x += digits[i];
+            }
+
+            if (weight >= digits.Length - 1)
+            {
+                pow = 0;
+
+                var mod = weight + 1 - digits.Length;
+                for (var i = 0; i < mod; i++)
+                {
+                    x *= 10000;
+                }
+                if (Int128.LeadingZeroCount(x) < 32)
+                {
+                    throw new OverflowException();
+                }
             }
             else
             {
-                result *= numericBase;
-                result += digit;
-
-                if (scaleDifference < 0)
+                if (weight < 0)
                 {
-                    // Doesn't look like we can loop even once, but just to be on a safe side
-                    while (scaleDifference < 0)
-                    {
-                        var scaleChunk = Math.Min(MaxUIntScale, -scaleDifference);
-                        result /= UIntPowers10[scaleChunk];
-                        scaleDifference += scaleChunk;
-                    }
+                    var digitsUsed = shortsUsed * 4;
+                    pow = (byte)(digitsUsed - (weight + 1) * 4);
                 }
                 else
                 {
-                    while (scaleDifference > 0)
+                    var count = CountDigits(digits[0]);
+                    var rest = 4 - count;
+                    var left = ((weight + 1) * 4) - rest;
+                    var trailing = (shortsUsed * 4 - rest) - left;
+                    pow = (byte)trailing;
+                }
+                var maxshifts = (int)pow;
+                while (Int128.LeadingZeroCount(x) < 32 || (pow > 28))
+                {
+                    // Apply rounding when dividing by 10
+                    var remainder = x % 10;
+                    x /= 10;
+                    // Round away from zero: if remainder >= 5, round up
+                    if (remainder >= 5 || remainder <= -5)
                     {
-                        var scaleChunk = Math.Min(MaxUIntScale, scaleDifference);
-                        scaleFactor *= UIntPowers10[scaleChunk];
-                        scaleDifference -= scaleChunk;
+                        x += remainder > 0 ? 1 : -1;
+                    }
+                    pow--;
+                    if (--maxshifts < 0)
+                    {
+                        throw new OverflowException();
                     }
                 }
             }
+            var lo = (int)(x & 0xffffffff);
+            var mid = (int)((x >> 32) & 0xffffffff);
+            var hi = (int)((x >> 64) & 0xffffffff);
+            var value = new decimal(lo, mid, hi, sign != 0, pow);
+            return value;
+        }
 
-            result *= scaleFactor;
-            return sign == SignNegative ? -result : result;
+        public static short CountDigits(short first)
+        {
+            short i = 0;
+            var t = first;
+            while (t > 0)
+            {
+                t /= 10;
+                i++;
+            }
+            return i;
         }
 
         internal static BigInteger ToBigInteger(short weight, ushort sign, Span<short> digits)

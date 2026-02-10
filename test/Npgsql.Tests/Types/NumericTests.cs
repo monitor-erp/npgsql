@@ -1,10 +1,11 @@
-﻿using System;
+﻿using NpgsqlTypes;
+using NUnit.Framework;
+using System;
 using System.Data;
+using System.Globalization;
 using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
-using NpgsqlTypes;
-using NUnit.Framework;
 
 namespace Npgsql.Tests.Types;
 
@@ -87,6 +88,38 @@ public class NumericTests(MultiplexingMode multiplexingMode) : MultiplexingTestB
         new object[] { "0::numeric", 0M }
     ];
 
+    static readonly string[] numericTests = new string[]
+    {
+        "264383.511600000000000000000000",
+        "980568.13428000000338620221111111111111678123678129",
+        "8980568.13428000000338620221111111111111678123678129",
+        "58980568.13428000000338620200011111111111678123678129",
+        "458980568.134280000003386202002222222222222678123678129",
+        "1458980568.13428000000338620201222222222222678123678129",
+        "1458980568.13428000000338620200000000000000000000000000",
+        "911112998.25401999999668454040000000000000000000000000",
+        "-911112998.25401999999668454040000000000000000000000000",
+        "9739.695000007986111111111111060000000000000000000000",
+        "966.691375001041666666666666600000000000000000000000",
+        "76.2600000000000000000000000000",
+        "279.0000000000000000000000000000",
+        "380000.0000000000000000000000000000",
+        "38123000000",
+        "38100000000",
+        "79228162514264337593543950335",
+        "-79228162514264337593543950335",
+    };
+
+    static readonly string[] overflowTests = new string[]
+    {
+        "79228162514264337593543950336",
+        "792281625142643375935439503361",
+        "-79228162514264337593543950336",
+        "-792281625142643375935439503361",
+        "79228162514264337593543950336.1",
+        "-79228162514264337593543950336.1",
+    };
+
     [Test]
     [TestCaseSource(nameof(ReadWriteCases))]
     public async Task Read(string query, decimal expected)
@@ -94,7 +127,7 @@ public class NumericTests(MultiplexingMode multiplexingMode) : MultiplexingTestB
         using var conn = await OpenConnectionAsync();
         using var cmd = new NpgsqlCommand("SELECT " + query, conn);
         var value = (decimal)(await cmd.ExecuteScalarAsync())!;
-        Assert.That(decimal.GetBits(value), Is.EqualTo(decimal.GetBits(expected)));
+        Assert.That(value, Is.EqualTo(expected));
     }
 
     [Test]
@@ -105,11 +138,61 @@ public class NumericTests(MultiplexingMode multiplexingMode) : MultiplexingTestB
         using var cmd = new NpgsqlCommand("SELECT @p, @p = " + query, conn);
         cmd.Parameters.AddWithValue("p", expected);
         using var rdr = await cmd.ExecuteReaderAsync();
+
         rdr.Read();
-        Assert.That(decimal.GetBits(rdr.GetFieldValue<decimal>(0)), Is.EqualTo(decimal.GetBits(expected)));
+
+        Assert.That(rdr.GetFieldValue<decimal>(0), Is.EqualTo(expected));
         Assert.That(rdr.GetFieldValue<bool>(1));
     }
 
+    [Test]
+    [TestCaseSource(nameof(numericTests))]
+    public async Task Scale_overflow_is_safe(string number)
+    {
+        using var conn = await OpenConnectionAsync();
+        using var cmd = new NpgsqlCommand($@"SELECT ({number})::numeric, generate_series FROM generate_series(1, 2)", conn);
+        using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess);
+        var i = 1;
+
+        var expected = decimal.Parse(number, CultureInfo.InvariantCulture);
+        while (reader.Read())
+        {
+            Assert.That(reader.GetDecimal(0), Is.EqualTo(expected));
+
+            var intValue = reader.GetInt32(1);
+
+            Assert.That(intValue, Is.EqualTo(i++));
+            Assert.That(conn.FullState, Is.EqualTo(ConnectionState.Open | ConnectionState.Fetching));
+            Assert.That(conn.State, Is.EqualTo(ConnectionState.Open));
+            Assert.That(reader.State, Is.EqualTo(ReaderState.InResult));
+        }
+    }
+
+    [Test]
+    [TestCaseSource(nameof(overflowTests))]
+    public async Task HandleDecimalMaxValue(string number)
+    {
+        using var conn = await OpenConnectionAsync();
+        using var cmd = new NpgsqlCommand($@"SELECT ({number})::numeric, generate_series FROM generate_series(1, 2)", conn);
+        using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess);
+
+        while (reader.Read())
+        {
+            try
+            {
+                var v = reader.GetDecimal(0);
+                Assert.Fail();
+            }
+            catch (OverflowException)
+            {
+
+            }
+            catch
+            {
+                Assert.Fail();
+            }
+        }
+    }
 
     [Test]
     public async Task Numeric()
@@ -134,12 +217,12 @@ public class NumericTests(MultiplexingMode multiplexingMode) : MultiplexingTestB
         using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess);
         var i = 1;
 
+        var expected = decimal.Parse("0.20285714285714285714285714286", CultureInfo.InvariantCulture);
+
         while (reader.Read())
         {
-            Assert.That(() => reader.GetDecimal(0),
-                Throws.Exception
-                    .With.TypeOf<OverflowException>()
-                    .With.Message.EqualTo("Numeric value does not fit in a System.Decimal"));
+            Assert.That(reader.GetDecimal(0), Is.EqualTo(expected));
+
             var intValue = reader.GetInt32(1);
 
             Assert.That(intValue, Is.EqualTo(i++));
@@ -201,7 +284,7 @@ public class NumericTests(MultiplexingMode multiplexingMode) : MultiplexingTestB
     [Test]
     public async Task NumericZero_WithScale()
     {
-        // Scale should not be lost when dealing with 0
+        // Scale should be lost when dealing with 0
         using var conn = await OpenConnectionAsync();
         using var cmd = new NpgsqlCommand("SELECT @p", conn);
         var param = new NpgsqlParameter("p", DbType.Decimal, 10, null, ParameterDirection.Input, false, 10, 2, DataRowVersion.Default, 0.00M);
@@ -210,7 +293,7 @@ public class NumericTests(MultiplexingMode multiplexingMode) : MultiplexingTestB
         await rdr.ReadAsync();
         var value = rdr.GetFieldValue<decimal>(0);
 
-        Assert.That(value.Scale, Is.EqualTo(2));
+        Assert.That(value.Scale, Is.EqualTo(0));
     }
 
     [Test, IssueLink("https://github.com/npgsql/npgsql/issues/6383")]
